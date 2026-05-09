@@ -1,4 +1,4 @@
-name: Gemini Q&A
+name: Gemini
 
 on:
   workflow_dispatch:
@@ -9,79 +9,66 @@ on:
         type: string
 
 jobs:
-  ask-gemini:
+  ask:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    timeout-minutes: 10
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: نصب ابزارها
-        run: sudo apt-get update && sudo apt-get install -y curl
-
-      - name: دریافت پاسخ از Gemini
+      - name: Call Gemini API
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          QUESTION: ${{ github.event.inputs.question }}
         run: |
-          QUESTION="${{ github.event.inputs.question }}"
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          SAFE_NAME=$(echo "$QUESTION" | cut -c1-20 | sed 's/[^a-zA-Z0-9]/_/g')
-          OUTPUT_DIR="gemini_answers/${SAFE_NAME}_${TIMESTAMP}"
-          mkdir -p "$OUTPUT_DIR"
+          mkdir -p "answers"
 
-          echo "$QUESTION" > "$OUTPUT_DIR/question.txt"
-
-          # ساخت JSON ساده با echo
-          cat > request.json << JSON
-          {
+          # ساخت JSON با استفاده از printf و فرار از کاراکترهای خاص
+          printf '{
             "contents": [{
-              "parts": [{"text": "$QUESTION"}]
+              "parts": [{"text": "%s"}]
             }]
-          }
-          JSON
+          }' "$QUESTION" > request.json
 
-          API_KEY="${{ secrets.GEMINI_API_KEY }}"
+          echo "📤 ارسال درخواست به Gemini..."
           curl -s -X POST \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$API_KEY" \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
             -H "Content-Type: application/json" \
-            -d @request.json > "$OUTPUT_DIR/raw_response.json"
+            -d @request.json \
+            > answers/response.json
 
-          # استخراج پاسخ با grep و sed ساده
-          cat "$OUTPUT_DIR/raw_response.json" | grep -o '"text":"[^"]*"' | head -1 | sed 's/"text":"//' | sed 's/"$//' > "$OUTPUT_DIR/answer.txt"
-
-          # اگه خطا بود
-          if grep -q "error" "$OUTPUT_DIR/raw_response.json"; then
-            echo "خطا: پاسخ دریافت نشد" >> "$OUTPUT_DIR/answer.txt"
+          # استخراج پاسخ با jq (اگر نصب نبود، نصب کن)
+          sudo apt-get update && sudo apt-get install -y jq
+          
+          if jq -e '.error' answers/response.json > /dev/null 2>&1; then
+            echo "❌ خطا از سمت API:" > answers/answer.txt
+            jq -r '.error.message' answers/response.json >> answers/answer.txt
+          else
+            jq -r '.candidates[0].content.parts[0].text' answers/response.json > answers/answer.txt
           fi
 
-          # ساخت README
-          echo "# Gemini Answer" > "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
-          echo "**Question:**" >> "$OUTPUT_DIR/README.md"
-          echo "$QUESTION" >> "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
-          echo "**Answer:**" >> "$OUTPUT_DIR/README.md"
-          cat "$OUTPUT_DIR/answer.txt" >> "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
-          echo "---" >> "$OUTPUT_DIR/README.md"
-          echo "Date: $(date)" >> "$OUTPUT_DIR/README.md"
+          # نمایش پاسخ
+          echo "========== پاسخ =========="
+          cat answers/answer.txt
+          echo "=========================="
 
-          # ساخت ZIP
-          cd gemini_answers && zip -r "${SAFE_NAME}_${TIMESTAMP}.zip" "${SAFE_NAME}_${TIMESTAMP}" && cd ..
+          # ذخیره در فایل README
+          cat > answers/README.md << EOF
+# 🤖 پاسخ Gemini
 
-          echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
+**سوال:** ${{ github.event.inputs.question }}
 
-      - name: آپلود
-        run: |
+**پاسخ:**
+$(cat answers/answer.txt)
+
+---
+تاریخ: $(date)
+EOF
+
+          # آپلود
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add gemini_answers/
-          git commit -m "Add Gemini Q&A" || echo "Nothing to commit"
-          git pull --rebase origin ${{ github.ref_name }} || true
-          git push origin HEAD:${{ github.ref_name }}
-
-      - name: نمایش نتیجه
-        run: |
-          echo "========== ANSWER =========="
-          cat "${{ env.OUTPUT_DIR }}/answer.txt"
-          echo "============================"
+          git add answers/
+          git commit -m "Gemini answer: ${{ github.event.inputs.question }}" || echo "No changes"
+          git push
