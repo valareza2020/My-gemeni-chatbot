@@ -1,4 +1,4 @@
-name: 🤖 پرسش از Gemini و ذخیره پاسخ
+name: Gemini Q&A
 
 on:
   workflow_dispatch:
@@ -19,114 +19,69 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: نصب ابزارها
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl python3
+        run: sudo apt-get update && sudo apt-get install -y curl
 
-      - name: ارسال سوال به Gemini با Python (درست)
+      - name: دریافت پاسخ از Gemini
         run: |
           QUESTION="${{ github.event.inputs.question }}"
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          SAFE_NAME=$(echo "$QUESTION" | cut -c1-30 | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/_*$//')
+          SAFE_NAME=$(echo "$QUESTION" | cut -c1-20 | sed 's/[^a-zA-Z0-9]/_/g')
           OUTPUT_DIR="gemini_answers/${SAFE_NAME}_${TIMESTAMP}"
           mkdir -p "$OUTPUT_DIR"
 
-          # ذخیره سوال
           echo "$QUESTION" > "$OUTPUT_DIR/question.txt"
 
-          # ساخت JSON با Python (درست encode می‌کند)
-          python3 << EOF
-          import json
-          import os
-
-          question = os.environ['QUESTION']
-          api_key = os.environ['GEMINI_API_KEY']
-
-          payload = {
-              "contents": [{
-                  "parts": [{"text": question}]
-              }]
+          # ساخت JSON ساده با echo
+          cat > request.json << JSON
+          {
+            "contents": [{
+              "parts": [{"text": "$QUESTION"}]
+            }]
           }
+          JSON
 
-          with open("request.json", "w") as f:
-              json.dump(payload, f)
-          EOF
-
-          # ارسال درخواست
           API_KEY="${{ secrets.GEMINI_API_KEY }}"
           curl -s -X POST \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$API_KEY" \
             -H "Content-Type: application/json" \
             -d @request.json > "$OUTPUT_DIR/raw_response.json"
 
-          # استخراج پاسخ با Python
-          python3 << EOF
-          import json
-          import os
+          # استخراج پاسخ با grep و sed ساده
+          cat "$OUTPUT_DIR/raw_response.json" | grep -o '"text":"[^"]*"' | head -1 | sed 's/"text":"//' | sed 's/"$//' > "$OUTPUT_DIR/answer.txt"
 
-          input_file = "$OUTPUT_DIR/raw_response.json"
-          output_file = "$OUTPUT_DIR/answer.txt"
-
-          try:
-              with open(input_file, "r") as f:
-                  data = json.load(f)
-
-              if "error" in data:
-                  answer = f"ERROR: {data['error'].get('message', 'Unknown error')}"
-              else:
-                  answer = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "پاسخی دریافت نشد")
-
-              with open(output_file, "w") as f:
-                  f.write(answer)
-          except Exception as e:
-              with open(output_file, "w") as f:
-                  f.write(f"خطا در پردازش: {str(e)}")
-          EOF
+          # اگه خطا بود
+          if grep -q "error" "$OUTPUT_DIR/raw_response.json"; then
+            echo "خطا: پاسخ دریافت نشد" >> "$OUTPUT_DIR/answer.txt"
+          fi
 
           # ساخت README
-          cat > "$OUTPUT_DIR/README.md" << 'EOF'
-          # 🤖 پرسش و پاسخ با Gemini
-
-          **تاریخ:** EOF
-          date >> "$OUTPUT_DIR/README.md"
+          echo "# Gemini Answer" > "$OUTPUT_DIR/README.md"
           echo "" >> "$OUTPUT_DIR/README.md"
-          echo "---" >> "$OUTPUT_DIR/README.md"
+          echo "**Question:**" >> "$OUTPUT_DIR/README.md"
+          echo "$QUESTION" >> "$OUTPUT_DIR/README.md"
           echo "" >> "$OUTPUT_DIR/README.md"
-          echo "## ❓ سوال شما" >> "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
-          cat "$OUTPUT_DIR/question.txt" >> "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
-          echo "---" >> "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
-          echo "## ✅ پاسخ Gemini" >> "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
+          echo "**Answer:**" >> "$OUTPUT_DIR/README.md"
           cat "$OUTPUT_DIR/answer.txt" >> "$OUTPUT_DIR/README.md"
           echo "" >> "$OUTPUT_DIR/README.md"
           echo "---" >> "$OUTPUT_DIR/README.md"
-          echo "" >> "$OUTPUT_DIR/README.md"
-          echo "*این پاسخ توسط Google Gemini تولید شده است*" >> "$OUTPUT_DIR/README.md"
+          echo "Date: $(date)" >> "$OUTPUT_DIR/README.md"
 
           # ساخت ZIP
-          cd gemini_answers
-          zip -r "${SAFE_NAME}_${TIMESTAMP}.zip" "${SAFE_NAME}_${TIMESTAMP}"
-          cd ..
+          cd gemini_answers && zip -r "${SAFE_NAME}_${TIMESTAMP}.zip" "${SAFE_NAME}_${TIMESTAMP}" && cd ..
 
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
 
-      - name: آپلود به گیت‌هاب
+      - name: آپلود
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add gemini_answers/
-          git commit -m "🤖 پرسش و پاسخ با Gemini - $(date +%Y%m%d_%H%M%S)" || echo "هیچ تغییری"
+          git commit -m "Add Gemini Q&A" || echo "Nothing to commit"
           git pull --rebase origin ${{ github.ref_name }} || true
           git push origin HEAD:${{ github.ref_name }}
 
-      - name: نمایش پاسخ
+      - name: نمایش نتیجه
         run: |
-          echo "================================"
-          echo "✅ پاسخ دریافت شد!"
-          echo "================================"
+          echo "========== ANSWER =========="
           cat "${{ env.OUTPUT_DIR }}/answer.txt"
-          echo "================================"
-          echo "📁 فایل‌ها در: ${{ env.OUTPUT_DIR }}"
+          echo "============================"
