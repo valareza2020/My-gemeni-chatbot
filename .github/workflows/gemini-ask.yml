@@ -1,4 +1,4 @@
-name: Gemini
+name: Gemini API Call
 
 on:
   workflow_dispatch:
