@@ -1,0 +1,113 @@
+name: 🤖 پرسش از Gemini و ذخیره پاسخ
+
+on:
+  workflow_dispatch:
+    inputs:
+      question:
+        description: 'سوال خود را بنویسید'
+        required: true
+        type: string
+
+jobs:
+  ask-gemini:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: نصب ابزارها
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl jq
+
+      - name: ارسال سوال به Gemini و دریافت پاسخ
+        run: |
+          QUESTION="${{ github.event.inputs.question }}"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          SAFE_NAME=$(echo "$QUESTION" | cut -c1-30 | sed 's/[^a-zA-Z0-9]/_/g')
+          OUTPUT_DIR="gemini_answers/${SAFE_NAME}_${TIMESTAMP}"
+          mkdir -p "$OUTPUT_DIR"
+
+          # ذخیره سوال
+          echo "$QUESTION" > "$OUTPUT_DIR/question.txt"
+
+          # آماده‌سازی JSON برای ارسال به Gemini
+          cat > request.json << EOF
+          {
+            "contents": [{
+              "parts": [{"text": "$(echo "$QUESTION" | jq -s -R -r @json)"}]
+            }]
+          }
+          EOF
+
+          # ارسال درخواست به Gemini API
+          API_KEY="${{ secrets.GEMINI_API_KEY }}"
+          RESPONSE=$(curl -s -X POST \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @request.json)
+
+          # استخراج پاسخ از JSON
+          echo "$RESPONSE" > "$OUTPUT_DIR/raw_response.json"
+          echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text' > "$OUTPUT_DIR/answer.txt" 2>/dev/null || echo "خطا در دریافت پاسخ" > "$OUTPUT_DIR/answer.txt"
+
+          # ساخت فایل README برای نمایش زیبا
+          cat > "$OUTPUT_DIR/README.md" << EOF
+          # 🤖 پرسش و پاسخ با Gemini
+
+          **تاریخ:** $(date)
+
+          ---
+
+          ## ❓ سوال شما
+
+          $(cat "$OUTPUT_DIR/question.txt")
+
+          ---
+
+          ## ✅ پاسخ Gemini
+
+          $(cat "$OUTPUT_DIR/answer.txt")
+
+          ---
+
+          ## 📄 فایل‌های خام
+
+          - [سوال](./question.txt)
+          - [پاسخ](./answer.txt)
+          - [پاسخ خام JSON](./raw_response.json)
+
+          ---
+
+          *این پاسخ توسط Google Gemini تولید شده است*
+          EOF
+
+          # ساخت فایل ZIP
+          cd gemini_answers
+          zip -r "${SAFE_NAME}_${TIMESTAMP}.zip" "${SAFE_NAME}_${TIMESTAMP}"
+          cd ..
+
+          echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
+
+      - name: آپلود به گیت‌هاب
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add gemini_answers/
+          git commit -m "🤖 پرسش و پاسخ با Gemini - $(date)" || echo "هیچ تغییری"
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: نمایش پاسخ در خروجی
+        run: |
+          echo "================================"
+          echo "✅ پاسخ دریافت شد!"
+          echo "📁 پوشه: ${{ env.OUTPUT_DIR }}"
+          echo "================================"
+          echo "پاسخ Gemini:"
+          echo "================================"
+          cat "${{ env.OUTPUT_DIR }}/answer.txt"
+          echo "================================"
