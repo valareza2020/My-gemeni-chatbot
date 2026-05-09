@@ -1,0 +1,41 @@
+name: Gemini Chat Bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      question:
+        description: 'Your question for Gemini'
+        required: true
+        default: 'Hello, Gemini!'
+
+permissions:
+  contents: write
+
+jobs:
+  chat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          pip install google-generativeai
+
+      - name: Run Gemini Script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python gemini_chat.py "${{ github.event.inputs.question }}"
+
+      - name: Commit and Push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add gemini_response.md
+          git commit -m "Update Gemini response: ${{ github.event.inputs.question }}" || echo "No changes to commit"
+          git push
