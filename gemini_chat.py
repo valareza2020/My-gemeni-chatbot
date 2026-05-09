@@ -1,24 +1,31 @@
 import os
-import google.generativeai as genai
 import sys
+from google import genai
 
-# تنظیم API Key
+# دریافت API Key
 api_key = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=api_key)
 
-# دریافت سوال از آرگومان‌های ورودی
+if not api_key:
+    print("Error: GEMINI_API_KEY is not set.")
+    sys.exit(1)
+
+# دریافت سوال
 if len(sys.argv) < 2:
     print("No question provided.")
     sys.exit(1)
 
 user_question = sys.argv[1]
 
-# مدل را انتخاب کنید (gemini-1.5-flash برای سرعت یا gemini-1.5-pro برای دقت بیشتر)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# راه‌اندازی کلاینت جدید گوگل
+client = genai.Client(api_key=api_key)
 
 try:
-    # ارسال درخواست به جمینای
-    response = model.generate_content(user_question)
+    # ارسال درخواست به مدل جدید
+    response = client.models.generate_content(
+        model="gemini-1.5-flash", 
+        contents=user_question
+    )
+    
     answer = response.text
 
     # ذخیره در فایل
@@ -30,5 +37,5 @@ try:
     print(f"Response saved to {filename}")
 
 except Exception as e:
-    print(f"Error: {e}")
+    print(f"Error occurred: {e}")
     sys.exit(1)
